@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+ 
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, user-scalable=no" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+ 
+        <title>Chain Exploder</title>
+        <meta name="description" content="tmlib.js 用公式エディタ. 色々と使えますよ♪" />
+
+        <style>body {
+    background-color: rgb(240, 240, 250);
+}
+
+h1 {
+    color: #444;
+    font-size: 23px;
+    font-family: 'Lucida Grande','Hiragino Kaku Gothic ProN', Meiryo, sans-serif;
+}</style>
+
+        <script src="http://cdn.rawgit.com/phi-jp/tmlib.js/0.5.1/build/tmlib.js"></script>
+		<script>// モバイルサウンド対応
+tm.main(function(){
+    var b= false;
+    var func;
+    document.getElementById('world').addEventListener('touchstart', func = function (e) {
+        if (b) return false;
+            b =  true;
+            tm.sound.WebAudio.unlock();
+            window.removeEventListener('touchstart', func);
+    });
+});
+// アセット
+var ASSETS = {
+
+};
+// 初期化
+tm.game.setup({
+    title: "Chain Exploder",
+    background: "midnightblue",
+});
+// 定数
+var ENEMY_SIZE      = SCREEN_GRID_X.span(1.5); // 敵のサイズ
+var ENEMY_COLOR     = "red"; // 敵の色
+var ENEMY_NUM       = 40; // 配置する敵の数
+var FRIEND_SIZE     = ENEMY_SIZE / 2;
+var FRIEND_COLOR    = "lime"; // 味方の色
+var FRIEND_NUM      = 5; // ヘルパーの数
+var EXPLOSION_MIN   = ENEMY_SIZE; // 爆発の初期サイズ
+var EXPLOSION_MAX   = SCREEN_GRID_X.span(3.5); // 爆発の最大サイズ
+var EXPLOSION_COLOR = ENEMY_COLOR; // 爆発の色
+var ETIME           = 1000; // 爆発最大化までの時間
+var FILL_COLOR      = "transparent";
+var HALF            = EXPLOSION_MAX / 2;
+var X_POS           = Array.range(HALF, SCREEN_WIDTH - HALF); // 敵を配置可能な場所
+var Y_POS           = Array.range(SCREEN_GRID_Y.span(1), SCREEN_HEIGHT - HALF);
+// 爆発スプライト用データ
+var explsnCanvas = CircleShape({
+    width: EXPLOSION_MIN,
+    height: EXPLOSION_MIN,
+    fillStyle: FILL_COLOR,
+    strokeStyle: ENEMY_COLOR,
+}).canvas;
+// 爆発グループ
+var explosionGroup = null;
+// ゲームシーン
+tm.define("GameScene", {
+    // 親クラスを指定
+    superClass: "Scene",
+    // 初期化
+    init: function() {
+        // 親クラスの初期化
+        this.superInit();
+        // ステータスバー
+        this.statusBar = RectangleShape({
+            width: SCREEN_WIDTH,
+            height: SCREEN_GRID_Y.span(1),
+            fillStyle: FILL_COLOR,
+            strokeStyle: "green",
+        }).addChildTo(this);
+        this.statusBar.setPosition(SCREEN_CENTER_X, SCREEN_GRID_Y.span(0.5));
+        // 敵グループ
+        this.enemyGroup = CanvasElement().addChildTo(this);
+        // 味方グループ
+        this.friendGroup = CanvasElement().addChildTo(this);
+        // 爆発グループ
+        explosionGroup = CanvasElement().addChildTo(this);
+        // スコア表示グループ
+        this.scoreGroup = CanvasElement().addChildTo(this);
+        // メッセージ
+        this.msgText = TextShape({
+            text: "Ready",
+            fillStyle: "lime",
+            strokeStyle: "green",
+        }).addChildTo(this);
+        this.msgText.left = SCREEN_WIDTH;
+        this.msgText.y = SCREEN_CENTER_Y;
+        // スコア合計
+        this.totalScore = 0;
+        // スコア合計表示用
+        this.totalLabel = Label(this.totalScore + "")
+            .addChildTo(this.statusBar).setFontSize(36).setFillStyle(FRIEND_COLOR);
+        // 参照用
+        this.enemys = this.enemyGroup.children;
+        this.friends = this.friendGroup.children;
+        this.explosions = explosionGroup.children;
+        // 初期化
+        this.initGame();        
+    },
+    // 初期化
+    initGame: function() {
+        this.initEnemys();
+    },
+    // 敵を配置
+    initEnemys: function() {
+        var self = this;
+        var enemy = Enemy().addChildTo(self.enemyGroup);
+        enemy.setPosition(X_POS.random(), Y_POS.random());
+        // 重ならないように配置
+        while (this.enemys.length < ENEMY_NUM) {
+            var safe = true;
+            var target = Enemy();
+            target.setPosition(X_POS.random(), Y_POS.random());
+            // 既に配置されているものとの重なりチェック
+            this.enemys.each(function(enemy) {
+                if (target.isHitElement(enemy)) {
+                    safe = false;            
+                }
+            });
+            // 重ならなければ追加
+            if (safe) {
+                target.addChildTo(self.enemyGroup);
+            }
+        }
+        // ID付与
+        this.enemys.each(function(enemy, i) {
+            enemy.id = i;
+        });
+        // 爆発スタート地点をセット
+        var randI = Array.range(0, ENEMY_NUM).random();
+        this.enemys.each(function(enemy) {
+            if (enemy.id === randI) {
+                enemy.isStart = true;            
+                enemy.strokeStyle = "white";    
+            }
+        });
+    },
+    // タッチ時
+    onpointingend: function(e) {
+        // 味方設置
+        Friend().addChildTo(this.friendGroup)
+            .setPosition(e.pointing.x | 0, e.pointing.y | 0);
+        // 全て置いたら爆発開始
+        if (this.friends.length === FRIEND_NUM) {
+            this.setInteractive(false);
+            this.enemys.each(function(enemy) {
+                if (enemy.isStart) {
+                    enemy.explode();    
+                }
+            });
+        }
+    },
+    // 当たり判定
+    hitCheck: function() {
+        var self = this;
+        var hit = false;
+        // 爆発と敵
+        this.explosions.each(function(explosion) {
+            self.enemys.each(function(enemy) {
+                if (!hit && explosion.isHitElement(enemy)) {
+                    enemy.explode();
+                    hit = true;
+                }
+            });    
+        });
+        // 爆発と味方
+        this.explosions.each(function(explosion) {
+            self.friends.each(function(friend) {
+                if (!hit && explosion.isHitElement(friend)) {
+                    friend.explode();
+                    hit = true;
+                }
+            });    
+        });
+    },
+    // ゲーム終了チェック
+/*    checkGameOver: function() {
+        // ミサイル打ち切り
+        if (this.mShot === MISSILE_MAX) {
+            this.exit("result", {
+                score: this.score,
+            });    
+        }
+    },*/
+    // 更新
+    update: function() {
+        // 辺り判定
+        this.hitCheck();
+    },
+});
+// 敵クラス
+tm.define("Enemy", {
+    // 親クラスを指定
+    superClass: "StarShape",
+    // 初期化
+    init: function() {
+        // 親クラスの初期化
+        this.superInit({
+            width: ENEMY_SIZE,
+            height: ENEMY_SIZE,
+            sides: 10,
+            sideIndent: 0.75,
+            fillStyle: FILL_COLOR,
+            strokeStyle: ENEMY_COLOR,
+        });
+        this.id = 0;
+        this.isStart = false;
+    },
+    // 爆発
+    explode: function() {
+        Explosion(this.x, this.y).addChildTo(explosionGroup);
+        this.remove();
+    },
+    // 更新
+    update: function() {
+        this.rotation += 2;    
+    },
+});
+// 味方クラス
+tm.define("Friend", {
+    // 親クラスを指定
+    superClass: "StarShape",
+    // 初期化
+    init: function() {
+        // 親クラスの初期化
+        this.superInit({
+            width: FRIEND_SIZE,
+            height: FRIEND_SIZE,
+            fillStyle: FRIEND_COLOR,
+            strokeStyle: FRIEND_COLOR,
+        });
+    },
+    // 爆発
+    explode: function() {
+        Explosion(this.x, this.y).addChildTo(explosionGroup);
+        this.remove();
+    },
+    // 更新
+    update: function() {
+        this.rotation += 4;    
+    },
+});
+// 爆発クラス
+tm.define("Explosion", {
+    // 親クラスを指定
+    superClass: "CircleShape",
+    // 初期化
+    init: function(x, y) {
+        // 親クラスの初期化
+        this.superInit({
+            width: EXPLOSION_MIN,
+            height: EXPLOSION_MIN,
+            fillStyle: FILL_COLOR,
+            strokeStyle: ENEMY_COLOR,
+        });
+        this.setPosition(x, y);
+        // tweener設定
+        var self = this;
+        this.tweener.clear()
+            .to({width: EXPLOSION_MAX, height: EXPLOSION_MAX, alpha: 0.5}, ETIME)
+            .call(function() {
+                self.remove();
+            });
+    },
+});
+// スコア表示
+/*tm.define("Score", {
+    // 親クラスを指定
+    superClass: "Label",
+    // 初期化
+    init: function(n, x, y) {
+        // 親クラスの初期化
+        this.superInit(n + "");
+        this.setPosition(x, y).setFillStyle(MISSILE_COLOR).setFontSize(36);
+        // tweener設定
+        var self = this;
+        score.tweener.clear()
+                     .to({y: score.y - SCREEN_GRID_Y.span(1) / 2, alpha: 0}, 1000)
+                     .call(function() {
+                         score.remove();
+                         self.checkGameOver();
+                     });
+    },
+});*/</script>
+    </head>
+    <body>
+        <canvas id="world"></canvas>
+    </body>
+</html>
